@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f59e0b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SolarNotes">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icon-192.svg">
+  <title>SolarNotes</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>SolarNotes</h1>
+    <p class="subtitle">Solar Tech Training Q&A</p>
+  </header>
+
+  <main>
+    <section class="ask-section">
+      <form id="ask-form">
+        <textarea id="question-input" placeholder="Ask a solar question... e.g. &quot;What's the difference between string and micro inverters?&quot;" rows="3"></textarea>
+        <button type="submit" id="ask-btn">
+          <span class="btn-text">Get Report</span>
+          <span class="btn-loading hidden">
+            <span class="spinner"></span> Generating...
+          </span>
+        </button>
+      </form>
+    </section>
+
+    <section class="notes-section">
+      <div class="notes-header">
+        <h2>Saved Notes <span id="note-count"></span></h2>
+        <input type="text" id="search-input" placeholder="Search notes...">
+      </div>
+      <div id="notes-list"></div>
+      <div id="empty-state" class="empty-state hidden">
+        <p>No notes yet. Ask your first question above!</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js');
+    }
+  </script>
+</body>
+</html>
