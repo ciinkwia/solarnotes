@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: solarnotes
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    plan: free
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
