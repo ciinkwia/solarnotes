@@ -1,4 +1,4 @@
-const CACHE_NAME = 'solarnotes-v1';
+const CACHE_NAME = 'solarnotes-v2';
 const STATIC_ASSETS = ['/', '/style.css', '/app.js', '/icon-192.svg', '/icon-512.svg', '/manifest.json'];
 
 self.addEventListener('install', (e) => {
@@ -18,8 +18,8 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // Always go to network for API calls
-  if (e.request.url.includes('/api/')) {
+  // Always go to network for API calls and auth
+  if (e.request.url.includes('/api/') || e.request.url.includes('/auth/') || e.request.url.includes('googleapis.com') || e.request.url.includes('gstatic.com') || e.request.url.includes('firebaseapp.com')) {
     return e.respondWith(fetch(e.request));
   }
   // Cache-first for static assets

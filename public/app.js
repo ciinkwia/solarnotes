@@ -1,3 +1,15 @@
+// Firebase Auth
+const auth = firebase.auth();
+const googleProvider = new firebase.auth.GoogleAuthProvider();
+
+// DOM elements
+const authScreen = document.getElementById('auth-screen');
+const appContent = document.getElementById('app-content');
+const userInfo = document.getElementById('user-info');
+const userName = document.getElementById('user-name');
+const signOutBtn = document.getElementById('sign-out-btn');
+const googleSignInBtn = document.getElementById('google-sign-in-btn');
+
 const form = document.getElementById('ask-form');
 const questionInput = document.getElementById('question-input');
 const askBtn = document.getElementById('ask-btn');
@@ -9,6 +21,52 @@ const noteCount = document.getElementById('note-count');
 const searchInput = document.getElementById('search-input');
 
 let notes = [];
+let currentUser = null;
+
+// Get Firebase ID token for API calls
+async function getAuthHeaders() {
+  if (!currentUser) return {};
+  const token = await currentUser.getIdToken();
+  return { 'Authorization': `Bearer ${token}` };
+}
+
+// Auth state listener
+auth.onAuthStateChanged(async (user) => {
+  if (user) {
+    currentUser = user;
+    userName.textContent = user.displayName || user.email;
+    userInfo.classList.remove('hidden');
+    authScreen.classList.add('hidden');
+    appContent.classList.remove('hidden');
+    loadNotes();
+  } else {
+    currentUser = null;
+    notes = [];
+    userInfo.classList.add('hidden');
+    appContent.classList.add('hidden');
+    authScreen.classList.remove('hidden');
+  }
+});
+
+// Sign in with Google
+googleSignInBtn.addEventListener('click', async () => {
+  try {
+    await auth.signInWithPopup(googleProvider);
+  } catch (err) {
+    // If popup blocked, try redirect
+    if (err.code === 'auth/popup-blocked') {
+      await auth.signInWithRedirect(googleProvider);
+    } else {
+      console.error('Sign-in error:', err);
+      alert('Sign-in failed: ' + err.message);
+    }
+  }
+});
+
+// Sign out
+signOutBtn.addEventListener('click', async () => {
+  await auth.signOut();
+});
 
 // Simple markdown to HTML
 function renderMarkdown(md) {
@@ -106,7 +164,8 @@ window.deleteNote = async function(id) {
   if (!confirm('Delete this note?')) return;
 
   try {
-    const res = await fetch(`/api/notes/${id}`, { method: 'DELETE' });
+    const headers = await getAuthHeaders();
+    const res = await fetch(`/api/notes/${id}`, { method: 'DELETE', headers });
     if (res.ok) {
       notes = notes.filter(n => n.id !== id);
       renderNotes(searchInput.value.toLowerCase().trim());
@@ -119,9 +178,12 @@ window.deleteNote = async function(id) {
 // Load notes on startup
 async function loadNotes() {
   try {
-    const res = await fetch('/api/notes');
-    notes = await res.json();
-    renderNotes();
+    const headers = await getAuthHeaders();
+    const res = await fetch('/api/notes', { headers });
+    if (res.ok) {
+      notes = await res.json();
+      renderNotes();
+    }
   } catch (err) {
     console.error('Failed to load notes:', err);
   }
@@ -138,9 +200,10 @@ form.addEventListener('submit', async (e) => {
   btnLoading.classList.remove('hidden');
 
   try {
+    const headers = await getAuthHeaders();
     const res = await fetch('/api/ask', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ question }),
     });
 
@@ -179,5 +242,3 @@ questionInput.addEventListener('keydown', (e) => {
     form.dispatchEvent(new Event('submit'));
   }
 });
-
-loadNotes();

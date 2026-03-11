@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
+const admin = require('firebase-admin');
 
 // Load .env file if it exists
 const envPath = path.join(__dirname, '.env');
@@ -14,9 +15,39 @@ if (fs.existsSync(envPath)) {
   });
 }
 
+// Initialize Firebase Admin
+let db;
+try {
+  let serviceAccount;
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  } else {
+    // Try loading from local file for development
+    const saPath = path.join(__dirname, 'firebase-service-account.json');
+    if (fs.existsSync(saPath)) {
+      serviceAccount = JSON.parse(fs.readFileSync(saPath, 'utf-8'));
+    }
+  }
+
+  if (serviceAccount) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    db = admin.firestore();
+    console.log('Firebase Admin initialized successfully');
+  } else {
+    console.warn('\n========================================');
+    console.warn('  Firebase service account not found!');
+    console.warn('  Set FIREBASE_SERVICE_ACCOUNT env var');
+    console.warn('  or place firebase-service-account.json in project root.');
+    console.warn('========================================\n');
+  }
+} catch (err) {
+  console.error('Firebase Admin init error:', err.message);
+}
+
 const app = express();
-const PORT = 3000;
-const NOTES_FILE = path.join(__dirname, 'data', 'notes.json');
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -57,23 +88,35 @@ One sentence the reader should remember above all else.
 
 Use markdown formatting. Be thorough but scannable — this technician may be reviewing these notes between jobs.`;
 
-// Load notes from file
-function loadNotes() {
+// Auth middleware — verify Firebase ID token
+async function verifyAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  const token = authHeader.split('Bearer ')[1];
   try {
-    const data = fs.readFileSync(NOTES_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch {
-    return [];
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      name: decodedToken.name || decodedToken.email,
+    };
+    next();
+  } catch (err) {
+    console.error('Auth error:', err.message);
+    return res.status(401).json({ error: 'Invalid or expired token' });
   }
 }
 
-// Save notes to file
-function saveNotes(notes) {
-  fs.writeFileSync(NOTES_FILE, JSON.stringify(notes, null, 2));
-}
+// Get current user info
+app.get('/api/me', verifyAuth, (req, res) => {
+  res.json(req.user);
+});
 
-// Ask a question — get Claude's answer and save it
-app.post('/api/ask', async (req, res) => {
+// Ask a question — get Claude's answer and save it to Firestore
+app.post('/api/ask', verifyAuth, async (req, res) => {
   const { question } = req.body;
   if (!question || !question.trim()) {
     return res.status(400).json({ error: 'Question is required' });
@@ -81,6 +124,10 @@ app.post('/api/ask', async (req, res) => {
 
   if (!anthropic) {
     return res.status(503).json({ error: 'ANTHROPIC_API_KEY is not set. Add it to your environment and restart the server.' });
+  }
+
+  if (!db) {
+    return res.status(503).json({ error: 'Firebase is not configured. Set FIREBASE_SERVICE_ACCOUNT.' });
   }
 
   try {
@@ -92,37 +139,80 @@ app.post('/api/ask', async (req, res) => {
     });
 
     const answer = message.content[0].text;
-    const notes = loadNotes();
-    const note = {
-      id: Date.now().toString(),
+    const noteData = {
+      userId: req.user.uid,
+      question: question.trim(),
+      answer,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    const docRef = await db.collection('notes').add(noteData);
+
+    res.json({
+      id: docRef.id,
       question: question.trim(),
       answer,
       createdAt: new Date().toISOString(),
-    };
-    notes.unshift(note);
-    saveNotes(notes);
-
-    res.json(note);
+    });
   } catch (err) {
     console.error('Claude API error:', err.message);
     res.status(500).json({ error: 'Failed to generate answer. Check your API key and try again.' });
   }
 });
 
-// Get all saved notes
-app.get('/api/notes', (req, res) => {
-  res.json(loadNotes());
+// Get all saved notes for the current user
+app.get('/api/notes', verifyAuth, async (req, res) => {
+  if (!db) {
+    return res.status(503).json({ error: 'Firebase is not configured.' });
+  }
+
+  try {
+    const snapshot = await db.collection('notes')
+      .where('userId', '==', req.user.uid)
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    const notes = snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        question: data.question,
+        answer: data.answer,
+        createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : new Date().toISOString(),
+      };
+    });
+
+    res.json(notes);
+  } catch (err) {
+    console.error('Firestore read error:', err.message);
+    res.status(500).json({ error: 'Failed to load notes.' });
+  }
 });
 
-// Delete a note
-app.delete('/api/notes/:id', (req, res) => {
-  const notes = loadNotes();
-  const filtered = notes.filter(n => n.id !== req.params.id);
-  if (filtered.length === notes.length) {
-    return res.status(404).json({ error: 'Note not found' });
+// Delete a note (only if it belongs to the current user)
+app.delete('/api/notes/:id', verifyAuth, async (req, res) => {
+  if (!db) {
+    return res.status(503).json({ error: 'Firebase is not configured.' });
   }
-  saveNotes(filtered);
-  res.json({ success: true });
+
+  try {
+    const docRef = db.collection('notes').doc(req.params.id);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
+
+    if (doc.data().userId !== req.user.uid) {
+      return res.status(403).json({ error: 'Not authorized to delete this note' });
+    }
+
+    await docRef.delete();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Firestore delete error:', err.message);
+    res.status(500).json({ error: 'Failed to delete note.' });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
