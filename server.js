@@ -62,27 +62,16 @@ if (!perplexityKey) {
   console.warn('========================================\n');
 }
 
-const SYSTEM_PROMPT = `You are a senior solar energy engineer and instructor helping a solar technician in training. When answering questions, provide a detailed, structured report using this format:
-
-## Summary
-A brief 2-3 sentence overview of the answer.
-
-## Detailed Explanation
-The core technical explanation. Use clear language but don't oversimplify — the reader is a technician, not a homeowner.
-
-## Practical Field Tips
-Bullet points with hands-on advice relevant to installation, troubleshooting, or maintenance work in the field.
-
-## Safety Considerations
-Any relevant safety warnings, PPE requirements, or hazard awareness.
-
-## Relevant Codes & Standards
-Reference applicable NEC articles, UL standards, or local code requirements where relevant. If none apply, omit this section.
-
-## Key Takeaway
-One sentence the reader should remember above all else.
-
-Use markdown formatting. Be thorough but scannable — this technician may be reviewing these notes between jobs.`;
+// Load system prompt from file
+const systemPromptPath = path.join(__dirname, 'system_prompt.txt');
+let SYSTEM_PROMPT;
+try {
+  SYSTEM_PROMPT = fs.readFileSync(systemPromptPath, 'utf-8').trim();
+  console.log('System prompt loaded from system_prompt.txt');
+} catch (err) {
+  console.warn('system_prompt.txt not found, using default prompt');
+  SYSTEM_PROMPT = 'You are a solar energy assistant helping a solar technician in the field. Provide accurate, practical answers with specific specs, code references, and safety warnings where relevant.';
+}
 
 // Call Perplexity Sonar Pro API
 async function callPerplexity(messages) {
