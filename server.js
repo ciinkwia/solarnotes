@@ -132,7 +132,7 @@ app.post('/api/ask', verifyAuth, async (req, res) => {
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-opus-4-6',
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: question.trim() }],
@@ -152,11 +152,77 @@ app.post('/api/ask', verifyAuth, async (req, res) => {
       id: docRef.id,
       question: question.trim(),
       answer,
+      followUps: [],
       createdAt: new Date().toISOString(),
     });
   } catch (err) {
     console.error('Claude API error:', err.message);
     res.status(500).json({ error: 'Failed to generate answer. Check your API key and try again.' });
+  }
+});
+
+// Follow up on an existing note
+app.post('/api/notes/:id/followup', verifyAuth, async (req, res) => {
+  const { question } = req.body;
+  if (!question || !question.trim()) {
+    return res.status(400).json({ error: 'Follow-up question is required' });
+  }
+
+  if (!anthropic) {
+    return res.status(503).json({ error: 'ANTHROPIC_API_KEY is not set.' });
+  }
+
+  if (!db) {
+    return res.status(503).json({ error: 'Firebase is not configured.' });
+  }
+
+  try {
+    const docRef = db.collection('notes').doc(req.params.id);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
+
+    if (doc.data().userId !== req.user.uid) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    const noteData = doc.data();
+    const followUps = noteData.followUps || [];
+
+    // Build conversation history for Claude
+    const messages = [
+      { role: 'user', content: noteData.question },
+      { role: 'assistant', content: noteData.answer },
+    ];
+    for (const fu of followUps) {
+      messages.push({ role: 'user', content: fu.question });
+      messages.push({ role: 'assistant', content: fu.answer });
+    }
+    messages.push({ role: 'user', content: question.trim() });
+
+    const message = await anthropic.messages.create({
+      model: 'claude-opus-4-6',
+      max_tokens: 4096,
+      system: SYSTEM_PROMPT,
+      messages,
+    });
+
+    const answer = message.content[0].text;
+    const newFollowUp = {
+      question: question.trim(),
+      answer,
+      createdAt: new Date().toISOString(),
+    };
+
+    followUps.push(newFollowUp);
+    await docRef.update({ followUps });
+
+    res.json(newFollowUp);
+  } catch (err) {
+    console.error('Follow-up error:', err.message);
+    res.status(500).json({ error: 'Failed to generate follow-up answer.' });
   }
 });
 
@@ -178,6 +244,7 @@ app.get('/api/notes', verifyAuth, async (req, res) => {
         id: doc.id,
         question: data.question,
         answer: data.answer,
+        followUps: data.followUps || [],
         createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : new Date().toISOString(),
       };
     });

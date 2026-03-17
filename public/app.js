@@ -141,7 +141,28 @@ function renderNotes(filter = '') {
             <span class="note-toggle">&#9660;</span>
           </div>
         </div>
-        <div class="note-answer">${renderMarkdown(note.answer)}</div>
+        <div class="note-answer">
+          ${renderMarkdown(note.answer)}
+          ${(note.followUps || []).map(fu => `
+            <div class="follow-up-thread">
+              <div class="follow-up-question"><strong>Follow-up:</strong> ${escapeHtml(fu.question)}</div>
+              <div class="follow-up-answer">${renderMarkdown(fu.answer)}</div>
+            </div>
+          `).join('')}
+          <div class="follow-up-section">
+            <button class="follow-up-btn" onclick="event.stopPropagation(); showFollowUp('${note.id}')">Ask Follow-up</button>
+            <div class="follow-up-form hidden" id="followup-form-${note.id}">
+              <textarea class="follow-up-input" id="followup-input-${note.id}" placeholder="Ask a follow-up question..." rows="2"></textarea>
+              <div class="follow-up-actions">
+                <button class="follow-up-submit" onclick="submitFollowUp('${note.id}')">
+                  <span class="fu-btn-text">Send</span>
+                  <span class="fu-btn-loading hidden"><span class="spinner"></span> Thinking...</span>
+                </button>
+                <button class="follow-up-cancel" onclick="hideFollowUp('${note.id}')">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     `).join('');
   }
@@ -172,6 +193,75 @@ window.deleteNote = async function(id) {
     }
   } catch (err) {
     console.error('Delete failed:', err);
+  }
+};
+
+// Follow-up functions
+window.showFollowUp = function(id) {
+  const form = document.getElementById(`followup-form-${id}`);
+  const btn = form?.previousElementSibling;
+  if (form) {
+    form.classList.remove('hidden');
+    if (btn) btn.classList.add('hidden');
+    document.getElementById(`followup-input-${id}`)?.focus();
+  }
+};
+
+window.hideFollowUp = function(id) {
+  const form = document.getElementById(`followup-form-${id}`);
+  const btn = form?.previousElementSibling;
+  if (form) {
+    form.classList.add('hidden');
+    if (btn) btn.classList.remove('hidden');
+  }
+};
+
+window.submitFollowUp = async function(id) {
+  const input = document.getElementById(`followup-input-${id}`);
+  const question = input?.value.trim();
+  if (!question) return;
+
+  const form = document.getElementById(`followup-form-${id}`);
+  const submitBtn = form.querySelector('.follow-up-submit');
+  const btnText = submitBtn.querySelector('.fu-btn-text');
+  const btnLoading = submitBtn.querySelector('.fu-btn-loading');
+
+  submitBtn.disabled = true;
+  btnText.classList.add('hidden');
+  btnLoading.classList.remove('hidden');
+
+  try {
+    const headers = await getAuthHeaders();
+    const res = await fetch(`/api/notes/${id}/followup`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Follow-up failed');
+    }
+
+    const followUp = await res.json();
+    const note = notes.find(n => n.id === id);
+    if (note) {
+      if (!note.followUps) note.followUps = [];
+      note.followUps.push(followUp);
+    }
+    renderNotes(searchInput.value.toLowerCase().trim());
+
+    // Re-expand the note
+    setTimeout(() => {
+      const card = document.querySelector(`.note-card[data-id="${id}"]`);
+      if (card) card.classList.add('expanded');
+    }, 50);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    submitBtn.disabled = false;
+    btnText.classList.remove('hidden');
+    btnLoading.classList.add('hidden');
   }
 };
 
