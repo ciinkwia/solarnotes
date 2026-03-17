@@ -1,7 +1,6 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const Anthropic = require('@anthropic-ai/sdk');
 const admin = require('firebase-admin');
 
 // Load .env file if it exists
@@ -52,18 +51,15 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Check for API key
-const apiKey = process.env.ANTHROPIC_API_KEY;
-let anthropic = null;
-if (!apiKey) {
+// Check for Perplexity API key
+const perplexityKey = process.env.PERPLEXITY_API_KEY;
+if (!perplexityKey) {
   console.warn('\n========================================');
-  console.warn('  ANTHROPIC_API_KEY is not set!');
+  console.warn('  PERPLEXITY_API_KEY is not set!');
   console.warn('  Set it in your environment:');
-  console.warn('    export ANTHROPIC_API_KEY=sk-ant-...');
+  console.warn('    export PERPLEXITY_API_KEY=pplx-...');
   console.warn('  The app will run but cannot generate answers.');
   console.warn('========================================\n');
-} else {
-  anthropic = new Anthropic({ apiKey });
 }
 
 const SYSTEM_PROMPT = `You are a senior solar energy engineer and instructor helping a solar technician in training. When answering questions, provide a detailed, structured report using this format:
@@ -87,6 +83,30 @@ Reference applicable NEC articles, UL standards, or local code requirements wher
 One sentence the reader should remember above all else.
 
 Use markdown formatting. Be thorough but scannable — this technician may be reviewing these notes between jobs.`;
+
+// Call Perplexity Sonar Pro API
+async function callPerplexity(messages) {
+  const res = await fetch('https://api.perplexity.ai/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${perplexityKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'sonar-pro',
+      messages,
+      max_tokens: 4096,
+    }),
+  });
+
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`Perplexity API error ${res.status}: ${errBody}`);
+  }
+
+  const data = await res.json();
+  return data.choices[0].message.content;
+}
 
 // Auth middleware — verify Firebase ID token
 async function verifyAuth(req, res, next) {
@@ -115,15 +135,15 @@ app.get('/api/me', verifyAuth, (req, res) => {
   res.json(req.user);
 });
 
-// Ask a question — get Claude's answer and save it to Firestore
+// Ask a question — get Perplexity's answer and save it to Firestore
 app.post('/api/ask', verifyAuth, async (req, res) => {
   const { question } = req.body;
   if (!question || !question.trim()) {
     return res.status(400).json({ error: 'Question is required' });
   }
 
-  if (!anthropic) {
-    return res.status(503).json({ error: 'ANTHROPIC_API_KEY is not set. Add it to your environment and restart the server.' });
+  if (!perplexityKey) {
+    return res.status(503).json({ error: 'PERPLEXITY_API_KEY is not set. Add it to your environment and restart the server.' });
   }
 
   if (!db) {
@@ -131,14 +151,12 @@ app.post('/api/ask', verifyAuth, async (req, res) => {
   }
 
   try {
-    const message = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: question.trim() }],
-    });
+    const messages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: question.trim() },
+    ];
 
-    const answer = message.content[0].text;
+    const answer = await callPerplexity(messages);
     const noteData = {
       userId: req.user.uid,
       question: question.trim(),
@@ -156,7 +174,7 @@ app.post('/api/ask', verifyAuth, async (req, res) => {
       createdAt: new Date().toISOString(),
     });
   } catch (err) {
-    console.error('Claude API error:', err.message);
+    console.error('Perplexity API error:', err.message);
     res.status(500).json({ error: 'Failed to generate answer. Check your API key and try again.' });
   }
 });
@@ -168,8 +186,8 @@ app.post('/api/notes/:id/followup', verifyAuth, async (req, res) => {
     return res.status(400).json({ error: 'Follow-up question is required' });
   }
 
-  if (!anthropic) {
-    return res.status(503).json({ error: 'ANTHROPIC_API_KEY is not set.' });
+  if (!perplexityKey) {
+    return res.status(503).json({ error: 'PERPLEXITY_API_KEY is not set.' });
   }
 
   if (!db) {
@@ -191,8 +209,9 @@ app.post('/api/notes/:id/followup', verifyAuth, async (req, res) => {
     const noteData = doc.data();
     const followUps = noteData.followUps || [];
 
-    // Build conversation history for Claude
+    // Build conversation history
     const messages = [
+      { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: noteData.question },
       { role: 'assistant', content: noteData.answer },
     ];
@@ -202,14 +221,7 @@ app.post('/api/notes/:id/followup', verifyAuth, async (req, res) => {
     }
     messages.push({ role: 'user', content: question.trim() });
 
-    const message = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      messages,
-    });
-
-    const answer = message.content[0].text;
+    const answer = await callPerplexity(messages);
     const newFollowUp = {
       question: question.trim(),
       answer,

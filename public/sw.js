@@ -1,4 +1,4 @@
-const CACHE_NAME = 'solarnotes-v2';
+const CACHE_NAME = 'solarnotes-v3';
 const STATIC_ASSETS = ['/', '/style.css', '/app.js', '/icon-192.svg', '/icon-512.svg', '/manifest.json'];
 
 self.addEventListener('install', (e) => {
